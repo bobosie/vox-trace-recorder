@@ -64,19 +64,25 @@ claude plugin install ax@ax-workflow --scope user
 
 裝完要**重開 Claude Code**（skill 在 session start 載入）。之後 `/ax:debug` 可用。
 
-## Step 5　自動上傳雲端（三件事，缺金鑰就跳過整段）
+## Step 5　自動上傳雲端（授權 → 設定 → 背景服務）
 
-上傳鏈需要 (a) 金鑰、(b) 目的地設定、(c) 背景上傳服務。**金鑰不在這個 repo 裡**（也不該在）。
+上傳走**使用者授權**（不是金鑰檔）：使用者用自己的公司 Google 帳號授權一次，
+之後錄影以他本人身分上傳到團隊共用碟。沒有長期金鑰要保管，離職即自動失效。
+
+**(a) 授權（一次就好）**
 
 ```bash
-ls ~/.config/vox-pm/service-account.json
+ls ~/.config/vox-pm/oauth_client.json     # 開發團隊提供，沒有就跟他們要
+cd ~/vox-trace
+uv run --with google-auth --with google-api-python-client python3 pipeline-pm/vox-pm-auth.py
 ```
 
-**(a) 金鑰**
-- 檔案已存在 → 跳到 (b)。
-- 不存在 → 問使用者：「開發團隊有給你一個 `service-account.json` 嗎？」
-  - 有（多半在 Slack 或 ~/Downloads）→ `mkdir -p ~/.config/vox-pm && mv <該檔> ~/.config/vox-pm/service-account.json && chmod 600 ~/.config/vox-pm/service-account.json`
-  - 沒有 → **整個 Step 5 跳過、不要卡住**。告訴他「錄製完全可用，只是錄完不會自動上傳，要手動把 `~/vox-pm-recordings/<session>` 交給開發團隊」，然後直接做 Step 6。
+- 會自動開瀏覽器 → 請使用者**用公司 Google 帳號**點「允許」→ 畫面出現「授權完成」。
+- 跳「未經 Google 驗證」→ 進階 → 前往（這是公司內部應用）。
+- 沒有 `uv` 就 `brew install uv`；沒有 GUI 加 `--print-url` 把網址給使用者自己開。
+- 成功會印 `✅ 已授權：<他的信箱>`，憑證寫在 `~/.config/vox-pm/user-token.json`。
+- **缺 `oauth_client.json` → 整個 Step 5 跳過、不要卡住**：告訴使用者「錄製完全可用，
+  只是不會自動上傳，要手動把 `~/vox-pm-recordings/<session>` 交給開發團隊」，直接做 Step 6。
 
 **(b) 目的地（雲端硬碟 ID）**
 
@@ -97,20 +103,25 @@ launchctl load -w ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist
 launchctl list | grep vox-pm-uploader      # 有一行才算掛上
 ```
 
-**驗證上傳鏈真的通**（金鑰存在時必做）：
+**(d) 驗證整條鏈（必做）**
 
 ```bash
 cd ~/vox-trace
 set -a; . ~/.config/vox-pm/env; set +a
-export VOX_PM_SA_KEY="$HOME/.config/vox-pm/service-account.json"
 uv run --with google-api-python-client --with google-auth-oauthlib --with google-auth \
   python3 pipeline-pm/vox-pm-gdrive.py auth
 ```
 
-看到「service account 可存取 Shared Drive ✓」才算過。沒有 `uv` 就 `brew install uv`。
-失敗（`invalid_grant` / `404 driveId`）→ 不要自己猜，回報使用者「金鑰或雲端硬碟設定要開發團隊重發」。
+看到 `可存取 Shared Drive ✓（憑證：使用者授權）` 才算過。
 
-> ⚠️ 絕對不要叫使用者把金鑰內容貼進聊天視窗。
+失敗對照：
+- `404 ... driveId` 或 `insufficientFilePermissions` → **這個帳號還沒被加進共用碟**。
+  把 (a) 印出來的信箱回報給開發團隊，請他們加成員，加完重跑 (d)。
+- `invalid_grant` → 授權過期或被撤銷 → 重跑 (a)。
+
+> 舊版是發一把 service account 金鑰檔給每個人；程式仍支援
+> （`~/.config/vox-pm/service-account.json`，只在沒有使用者授權時才會用到），
+> 但**新安裝一律走上面的使用者授權**。若機器上還留著舊金鑰檔，授權完成後可以刪掉。
 
 ## Step 6　回報
 
