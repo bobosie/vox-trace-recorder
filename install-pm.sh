@@ -14,7 +14,7 @@
 # ─── 設定 ───────────────────────────────────────────────────
 
 VOXTRACE_GIT_URL="${VOXTRACE_GIT_URL:-https://github.com/bobosie/vox-trace-recorder.git}"
-VOXTRACE_DEST="${VOXTRACE_DEST:-$HOME/vox-trace-pm}"
+VOXTRACE_DEST="${VOXTRACE_DEST:-$HOME/vox-trace}"   # 與 ax:debug / VOX_TRACE_DIR 預設一致
 DEFAULT_REC_DIR="${VOX_PM_RECORDINGS:-$HOME/vox-pm-recordings}"
 DEPLOY_KEY="$HOME/.ssh/vox-trace-deploy"
 
@@ -473,6 +473,23 @@ if [[ -f "$SKILL_SRC/SKILL.md" ]]; then
 else
     warn "找不到 skill 來源（$SKILL_SRC/SKILL.md），略過 Claude skill 安裝"
 fi
+
+# ─── Step 14.5: 告訴 Claude Code 專案在哪（VOX_TRACE_DIR）─
+
+step "🧭 設定 VOX_TRACE_DIR..."
+
+python3 - "$VOXTRACE_DEST" <<'PY' && ok "已寫入 ~/.claude/settings.json 的 env.VOX_TRACE_DIR" || warn "VOX_TRACE_DIR 未寫入（不影響錄製，只影響 Claude skill 找路徑）"
+import json, os, sys
+dest = sys.argv[1]
+cfg = os.path.expanduser("~/.claude/settings.json")
+os.makedirs(os.path.dirname(cfg), exist_ok=True)
+try:
+    d = json.load(open(cfg))
+except Exception:
+    d = {}
+d.setdefault("env", {})["VOX_TRACE_DIR"] = dest
+json.dump(d, open(cfg, "w"), indent=2, ensure_ascii=False)
+PY
 
 # ─── Step 15: AX 工作流 plugin（選配，有 claude CLI 才裝）──
 
