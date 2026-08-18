@@ -64,20 +64,53 @@ claude plugin install ax@ax-workflow --scope user
 
 裝完要**重開 Claude Code**（skill 在 session start 載入）。之後 `/ax:debug` 可用。
 
-## Step 5　自動上傳雲端（需要金鑰，**沒有就跳過**）
+## Step 5　自動上傳雲端（三件事，缺金鑰就跳過整段）
 
-上傳鏈需要 Google service account 金鑰，**不在這個 repo 裡**（也不該在）。
+上傳鏈需要 (a) 金鑰、(b) 目的地設定、(c) 背景上傳服務。**金鑰不在這個 repo 裡**（也不該在）。
 
 ```bash
 ls ~/.config/vox-pm/service-account.json
 ```
 
-- **檔案存在** → 已設定好，不用動。
-- **檔案不存在** → 問使用者：「開發團隊有給你一個 `service-account.json` 金鑰檔嗎？」
-  - 有 → 請他把檔案放到 `~/.config/vox-pm/service-account.json`（`mkdir -p ~/.config/vox-pm` 後 `chmod 600`）。
-  - 沒有 → **不要卡住**。告訴他「錄製功能完全可用，只是錄完不會自動上傳，要手動把 `~/vox-pm-recordings/<session>` 交給開發團隊」，然後繼續。
+**(a) 金鑰**
+- 檔案已存在 → 跳到 (b)。
+- 不存在 → 問使用者：「開發團隊有給你一個 `service-account.json` 嗎？」
+  - 有（多半在 Slack 或 ~/Downloads）→ `mkdir -p ~/.config/vox-pm && mv <該檔> ~/.config/vox-pm/service-account.json && chmod 600 ~/.config/vox-pm/service-account.json`
+  - 沒有 → **整個 Step 5 跳過、不要卡住**。告訴他「錄製完全可用，只是錄完不會自動上傳，要手動把 `~/vox-pm-recordings/<session>` 交給開發團隊」，然後直接做 Step 6。
 
-> ⚠️ 絕對不要叫使用者把金鑰內容貼進聊天視窗、也不要把金鑰內容寫進任何檔案以外的地方。
+**(b) 目的地（雲端硬碟 ID）**
+
+```bash
+mkdir -p ~/.config/vox-pm
+grep -q VOX_PM_DRIVE_ID ~/.config/vox-pm/env 2>/dev/null || \
+  echo 'export VOX_PM_DRIVE_ID=0AARcpNp_0suwUk9PVA' >> ~/.config/vox-pm/env
+```
+
+**(c) 背景上傳服務（launchd，每 120 秒掃一次佇列）**
+
+```bash
+sed "s#__VOXTRACE_DEST__#$HOME/vox-trace#g" \
+  ~/vox-trace/pipeline-pm/com.voxtrace.vox-pm-uploader.plist \
+  > ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist
+launchctl unload ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist 2>/dev/null
+launchctl load -w ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist
+launchctl list | grep vox-pm-uploader      # 有一行才算掛上
+```
+
+**驗證上傳鏈真的通**（金鑰存在時必做）：
+
+```bash
+cd ~/vox-trace
+set -a; . ~/.config/vox-pm/env; set +a
+export VOX_PM_SA_KEY="$HOME/.config/vox-pm/service-account.json"
+uv run --with google-api-python-client --with google-auth-oauthlib --with google-auth \
+  python3 pipeline-pm/vox-pm-gdrive.py auth
+```
+
+看到「service account 可存取 Shared Drive ✓」才算過。沒有 `uv` 就 `brew install uv`。
+失敗（`invalid_grant` / `404 driveId`）→ 不要自己猜，回報使用者「金鑰或雲端硬碟設定要開發團隊重發」。
+
+> ⚠️ 絕對不要叫使用者把金鑰內容貼進聊天視窗。
 
 ## Step 6　回報
 
