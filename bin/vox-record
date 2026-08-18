@@ -1,0 +1,109 @@
+#!/bin/bash
+# vox-record — PM 專用錄製指令
+# 用法：vox-record [URL]
+#   vox-record                        → 開啟空白瀏覽器
+#   vox-record https://example.com    → 開啟指定 URL
+#   vox-record --set-shared-dir /path → 設定共享資料夾
+#   vox-record --help                 → 說明
+
+set -e
+
+VOXTRACE_DIR="${VOXTRACE_DIR:-$HOME/vox-trace}"
+SHARED_DIR_FILE="$VOXTRACE_DIR/.shared-dir"
+
+# 讀取共享資料夾設定
+get_shared_dir() {
+    if [ -f "$SHARED_DIR_FILE" ]; then
+        cat "$SHARED_DIR_FILE"
+    else
+        echo "$HOME/vox-trace-recordings"
+    fi
+}
+
+# 處理 --set-shared-dir
+if [ "$1" = "--set-shared-dir" ]; then
+    echo "$2" > "$SHARED_DIR_FILE"
+    mkdir -p "$2"
+    echo "✅ 共享資料夾已設定為: $2"
+    exit 0
+fi
+
+# 處理 --help
+if [ "$1" = "--help" ] || [ "$1" = "-h" ]; then
+    echo "🎬 vox-record — 測試錄製工具"
+    echo ""
+    echo "用法："
+    echo "  vox-record                     開啟瀏覽器，自行輸入網址"
+    echo "  vox-record <URL>               開啟指定網址"
+    echo "  vox-record --set-shared-dir    設定錄製檔案存放位置"
+    echo "  vox-record --help              顯示此說明"
+    exit 0
+fi
+
+# 檢查 vox-trace 是否安裝
+if [ ! -f "$VOXTRACE_DIR/start.sh" ]; then
+    echo "❌ vox-trace 未安裝。請先執行安裝腳本。"
+    exit 1
+fi
+
+# 開始錄製
+echo ""
+echo "🎬 開始錄製測試"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "📋 操作提示："
+echo "   1. 在瀏覽器中正常操作"
+echo "   2. 邊操作邊說明你在做什麼"
+echo "   3. 做完後在 Inspector 視窗按「Resume」"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+cd "$VOXTRACE_DIR"
+
+# 組裝參數
+ARGS=""
+if [ -n "$1" ]; then
+    ARGS="--base-url $1"
+fi
+
+# 執行錄製
+./start.sh record $ARGS
+
+# 錄製結束，複製到共享資料夾
+SHARED_DIR=$(get_shared_dir)
+mkdir -p "$SHARED_DIR"
+
+LATEST=$(ls -t recordings/ 2>/dev/null | head -1)
+if [ -n "$LATEST" ] && [ -d "recordings/$LATEST" ]; then
+    echo ""
+    echo "📦 複製錄製資料到共享資料夾..."
+    cp -r "recordings/$LATEST" "$SHARED_DIR/"
+
+    # 如果有 analyze，自動產生 spec
+    if [ -f "src/generate-spec.ts" ]; then
+        echo "🔍 自動分析中..."
+        ./start.sh analyze "$LATEST" 2>/dev/null || true
+        # 也複製 spec 到共享資料夾
+        SPEC_FILE="spec-schema/specs/${LATEST}.spec.yaml"
+        if [ -f "$SPEC_FILE" ]; then
+            cp "$SPEC_FILE" "$SHARED_DIR/$LATEST/"
+            echo "📄 Spec 已產生並複製"
+        fi
+    fi
+
+    # 摘要
+    SCREENSHOTS=$(ls "recordings/$LATEST/screenshots/"*.png 2>/dev/null | wc -l | tr -d ' ')
+    APIS=$(python3 -c "import json; d=json.load(open('recordings/$LATEST/network.json')); print(len(d))" 2>/dev/null || echo "?")
+
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✅ 錄製完成！"
+    echo ""
+    echo "   📸 截圖: $SCREENSHOTS 張"
+    echo "   📡 API: $APIS 筆"
+    echo "   📁 儲存: $SHARED_DIR/$LATEST/"
+    echo ""
+    echo "   不需要做其他事情，開發團隊會處理後續。"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+fi

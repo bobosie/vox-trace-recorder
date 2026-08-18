@@ -1,0 +1,37 @@
+#!/bin/bash
+# vox-pm-ship <session_dir>
+# 把單筆 PM 錄製上傳到 Google Drive intake 資料夾。
+# 呼叫 vox-pm-gdrive.py upload；透傳其 exit code：
+#   0  → 成功（已上傳，含 _complete.json 標記）
+#   75 → 網路錯誤，caller 應視為「稍後重試」（不算失敗）
+#   其他 → 失敗
+export PATH=/opt/homebrew/bin:$HOME/.local/bin:$HOME/bin:$PATH
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=vox-queue-lib.sh
+source "$SELF_DIR/vox-queue-lib.sh"
+
+GDRIVE_PY="$SELF_DIR/vox-pm-gdrive.py"
+FOLDER="${VOX_PM_GDRIVE_FOLDER:-VoiceTrace-PM-Intake}"
+UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
+
+ARG="${1:?用法: vox-pm-ship <session_dir>}"
+SRC="${ARG%/}"
+NAME="$(basename "$SRC")"
+
+# session 名稱驗證：拒路徑穿越
+if ! vox_valid_session_name "$NAME"; then
+    echo "[vox-pm-ship] 非法 session 名稱: $NAME" >&2
+    exit 1
+fi
+if [ ! -d "$SRC" ]; then
+    echo "[vox-pm-ship] 找不到 session 目錄: $SRC" >&2
+    exit 1
+fi
+
+"$UV" run --quiet \
+    --with google-api-python-client --with google-auth-oauthlib --with google-auth \
+    python3 "$GDRIVE_PY" upload --session-dir "$SRC" --folder "$FOLDER"
+rc=$?
+exit "$rc"

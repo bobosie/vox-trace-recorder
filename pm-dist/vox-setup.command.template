@@ -1,0 +1,36 @@
+#!/bin/bash
+# ============================================================
+# vox-setup — VoiceTrace PM 一鍵安裝（雙擊執行）
+#
+# 使用方式（給 PM）：
+#   1. 直接「雙擊」這個檔案（vox-setup.command）即可開始安裝。
+#      （若 macOS 說「無法打開，因為來自未識別的開發者」，
+#        在檔案上按右鍵 → 選「打開」→ 再按「打開」。）
+#   2. 第一次安裝會跳出「安裝開發者工具」對話框，請點「安裝」。
+#   3. 第一次錄製時系統會問麥克風權限，請點「允許」。
+#   4. 裝完後桌面會出現「vox-record」捷徑，雙擊即可開始錄製。
+#
+# 注意：這個檔案由開發團隊產出，內含專屬金鑰，請勿外流。
+# ============================================================
+
+# ─── 專屬憑證（由開發團隊在產出時填入，PM 不需修改）──────────
+export VOX_PM_SA_KEY_B64='__SA_KEY_B64__'
+export VOX_PM_DRIVE_ID='__DRIVE_ID__'
+
+set -e
+
+# 注意：macOS 雙擊 .command 時工作目錄是 $HOME，不是本檔案所在目錄，
+# 因此以下全部使用絕對路徑（$HOME），不依賴相對路徑。
+
+# ─── clone 或更新 repo（public repo，免金鑰）─────────────────
+DEST="$HOME/vox-trace-pm"
+if [ -d "$DEST/.git" ]; then
+  git -C "$DEST" pull --ff-only -q || true
+else
+  git clone -q https://github.com/bobosie/vox-trace-recorder.git "$DEST"
+fi
+
+# ─── 交給 repo 內正式 installer 完成其餘（idempotent）───────
+# 環境變數（VOX_PM_SA_KEY_B64 / VOX_PM_DRIVE_ID）
+# 已 export，install-pm.sh 會接手 deps / wrapper / launchd / sa / env / skill。
+exec bash "$DEST/install-pm.sh"
