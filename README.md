@@ -4,6 +4,9 @@ Record manual browser sessions → structured data for AI-assisted test generati
 
 > 這是 **recorder 子集**：只含「錄製 → 產出 → （選配）自動上傳」那條鏈。
 > 搭配 Claude Code 的 `ax:debug` 使用時，把本 repo clone 到 `~/vox-trace`（或設 `VOX_TRACE_DIR` 指到它）。
+>
+> **不想自己敲指令？** 把這句貼給你的 AI 助理（Claude Code）：
+> 「請讀 https://raw.githubusercontent.com/bobosie/vox-trace-recorder/main/INSTALL-FOR-AI.md 並照做，裝完幫我驗證。」
 
 ## What it does
 

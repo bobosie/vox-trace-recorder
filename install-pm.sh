@@ -474,6 +474,21 @@ else
     warn "找不到 skill 來源（$SKILL_SRC/SKILL.md），略過 Claude skill 安裝"
 fi
 
+# ─── Step 15: AX 工作流 plugin（選配，有 claude CLI 才裝）──
+
+step "🧩 安裝 AX 工作流 plugin（選配）..."
+
+if command -v claude >/dev/null 2>&1; then
+    if claude plugin marketplace add bobosie/ax-workflow >/dev/null 2>&1 || true; then :; fi
+    if claude plugin install ax@ax-workflow --scope user >/dev/null 2>&1; then
+        ok "AX plugin 已安裝（下次開 Claude Code 生效）"
+    else
+        warn "AX plugin 安裝未成功（不影響錄製功能），可稍後手動執行：claude plugin install ax@ax-workflow --scope user"
+    fi
+else
+    skip "AX plugin（此機器沒有 claude CLI）"
+fi
+
 # ─── 完成 ───────────────────────────────────────────────────
 
 echo ""
