@@ -17,6 +17,6 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GDRIVE_PY="$SELF_DIR/vox-pm-gdrive.py"
 UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 
-exec "$UV" run --quiet \
+exec "$UV" run --quiet --python 3.12 \
     --with google-api-python-client --with google-auth \
     python3 "$GDRIVE_PY" "$@"

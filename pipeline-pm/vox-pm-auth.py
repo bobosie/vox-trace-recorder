@@ -7,7 +7,7 @@
 權限跟著人走、離職即失效、沒有任何金鑰檔要傳遞。
 
 用法：
-    uv run --with google-auth --with google-api-python-client python3 vox-pm-auth.py
+    uv run --python 3.12 --with google-auth --with google-api-python-client python3 vox-pm-auth.py
     # 加 --print-url：只印網址不開瀏覽器（遠端 / 無 GUI 時用）
 
 前置：`~/.config/vox-pm/oauth_client.json`（開發團隊提供的 OAuth client 設定；

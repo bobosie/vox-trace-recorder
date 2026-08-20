@@ -30,7 +30,7 @@ if [ ! -d "$SRC" ]; then
     exit 1
 fi
 
-"$UV" run --quiet \
+"$UV" run --quiet --python 3.12 \
     --with google-api-python-client --with google-auth-oauthlib --with google-auth \
     python3 "$GDRIVE_PY" upload --session-dir "$SRC" --folder "$FOLDER"
 rc=$?

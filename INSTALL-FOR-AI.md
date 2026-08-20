@@ -76,7 +76,7 @@ claude plugin install ax@ax-workflow --scope user
 ```bash
 ls ~/.config/vox-pm/oauth_client.json     # 開發團隊提供，沒有就跟他們要
 cd ~/vox-trace
-uv run --with google-auth --with google-api-python-client python3 pipeline-pm/vox-pm-auth.py
+uv run --python 3.12 --with google-auth --with google-api-python-client python3 pipeline-pm/vox-pm-auth.py
 ```
 
 - 會自動開瀏覽器 → 請使用者**用公司 Google 帳號**點「允許」→ 畫面出現「授權完成」。
@@ -110,7 +110,7 @@ launchctl list | grep vox-pm-uploader      # 有一行才算掛上
 ```bash
 cd ~/vox-trace
 set -a; . ~/.config/vox-pm/env; set +a
-uv run --with google-api-python-client --with google-auth-oauthlib --with google-auth \
+uv run --python 3.12 --with google-api-python-client --with google-auth-oauthlib --with google-auth \
   python3 pipeline-pm/vox-pm-gdrive.py auth
 ```
 
@@ -121,9 +121,10 @@ uv run --with google-api-python-client --with google-auth-oauthlib --with google
   把 (a) 印出來的信箱回報給開發團隊，請他們加成員，加完重跑 (d)。
 - `invalid_grant` → 授權過期或被撤銷 → 重跑 (a)。
 
-> 舊版是發一把 service account 金鑰檔給每個人；程式仍支援
-> （`~/.config/vox-pm/service-account.json`，只在沒有使用者授權時才會用到），
-> 但**新安裝一律走上面的使用者授權**。若機器上還留著舊金鑰檔，授權完成後可以刪掉。
+> **開發團隊直接給你 `service-account.json` 的話，用金鑰也完全可以**——把它放到
+> `~/.config/vox-pm/service-account.json`（600）就好，不必開瀏覽器，做法見 `FIX-UPLOAD-FOR-AI.md` Step 2A。
+> 上面的使用者授權是給「沒拿到金鑰檔」的人走的（新加入的人一律如此，公司已不再發新金鑰）。
+> 程式取用順序是**使用者授權優先、金鑰後備**，兩個都在不會打架，也不必為了換而換。
 
 ## Step 6　回報
 

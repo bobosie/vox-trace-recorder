@@ -8,7 +8,7 @@
 driveId 不是機密（安裝文件裡就有值），不需要向任何人索取。
 
 執行方式（帶依賴，不綁 venv）：
-    uv run --with google-api-python-client --with google-auth \\
+    uv run --python 3.12 --with google-api-python-client --with google-auth \\
         python3 vox-pm-gdrive.py <subcommand> ...
 
 Subcommands:

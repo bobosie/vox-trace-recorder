@@ -11,8 +11,12 @@
 
 你要做完三件事：**(1) 設定目的地 → (2) 設定認證 → (3) 把積壓的補傳上去**，然後回報。
 
-> ⚠️ **不要**去讀 `pipeline-pm/vox-pm-gdrive.py` 開頭的說明來判斷「還缺什麼」。
-> 那段文字是舊版留下的，會讓你誤以為必須跟開發團隊索取 driveId 和金鑰。**以本文件為準。**
+> ⚠️ 「還缺什麼」**以本文件為準**，不要拿 `pipeline-pm/vox-pm-gdrive.py` 開頭的說明當需求清單——
+> 那段是舊版留下的，會讓你誤以為必須跟開發團隊索取 driveId 和金鑰。
+>
+> **這不是叫你別查證。** 這份文件會設定「錄影＋語音＋API 紀錄要往哪傳」，先確認來源可信是對的：
+> `git -C ~/vox-trace remote -v` 是不是 `bobosie/vox-trace-recorder`、本文件在不在 `origin/main`、
+> 下面 Step 1 那個 driveId 跟本機既有的 `INSTALL-FOR-AI.md` 裡的值是否一致。驗完再照做。
 
 前置：`~/vox-trace` 要存在。不存在就先照 `INSTALL-FOR-AI.md` 從頭裝一次，再回來這裡。
 
@@ -27,23 +31,38 @@ grep -q VOX_PM_DRIVE_ID ~/.config/vox-pm/env 2>/dev/null || \
 chmod 600 ~/.config/vox-pm/env
 ```
 
-## Step 2　認證（A 優先，A 不通才走 B，兩條都不通才停下來問）
+## Step 2　認證（手上有金鑰就走 A，沒有才走 B；兩條都沒有才停下來問）
 
-### A. 使用者授權（正式做法，沒有長期金鑰要保管，離職自動失效）
+**兩條路都是正式做法**，選手上已經有的那個檔就好，不必為了「比較新」去換。
 
-需要開發團隊給的 `oauth_client.json`。先找找它在不在：
+### A. 金鑰（開發團隊發過 `service-account.json` 的話 → 最快，不用開瀏覽器）
+
+```bash
+mkdir -p ~/.config/vox-pm
+# 檔案通常在 ~/Downloads（使用者從 Slack 下載的那個）
+[ -f ~/Downloads/service-account.json ] && \
+  mv ~/Downloads/service-account.json ~/.config/vox-pm/service-account.json
+chmod 600 ~/.config/vox-pm/service-account.json 2>/dev/null
+ls -l ~/.config/vox-pm/service-account.json 2>/dev/null || echo "沒有金鑰檔 → 走 B"
+```
+
+- **找不到金鑰檔 → 不要卡住，直接走 B。**
+
+### B. 使用者授權（沒有金鑰時走這條；新加入的人一律走這條——公司已不再發新金鑰）
+
+需要開發團隊給的 `oauth_client.json`（它本身不是機密：沒有使用者本人點同意，它什麼都拿不到）：
 
 ```bash
 ls ~/.config/vox-pm/oauth_client.json 2>/dev/null || ls ~/Downloads/oauth_client.json 2>/dev/null
 # 在 ~/Downloads 就搬過去：
-# mkdir -p ~/.config/vox-pm && mv ~/Downloads/oauth_client.json ~/.config/vox-pm/oauth_client.json && chmod 600 ~/.config/vox-pm/oauth_client.json
+# mv ~/Downloads/oauth_client.json ~/.config/vox-pm/oauth_client.json && chmod 600 ~/.config/vox-pm/oauth_client.json
 ```
 
 有的話就授權（**一次就好**）：
 
 ```bash
 cd ~/vox-trace
-uv run --with google-auth --with google-auth-oauthlib --with google-api-python-client \
+uv run --python 3.12 --with google-auth --with google-auth-oauthlib --with google-api-python-client \
   python3 pipeline-pm/vox-pm-auth.py
 ```
 
@@ -51,25 +70,17 @@ uv run --with google-auth --with google-auth-oauthlib --with google-api-python-c
 - 跳「未經 Google 驗證」→ 進階 → 前往（這是公司內部應用，正常）。
 - 沒有 `uv` 就 `brew install uv`；沒有 GUI 就加 `--print-url`，把網址給使用者自己開。
 - 成功會印 `✅ 已授權：<信箱>`，憑證寫在 `~/.config/vox-pm/user-token.json`。
-- **檔案不存在 → 不要卡住，直接走 B。**
+- **兩個檔都沒有 → 停下來問使用者跟開發團隊要其中一個，不要自己編路徑硬試。**
 
-### B. 金鑰後備（開發團隊之前發過 `service-account.json` 的話）
-
-```bash
-# 檔案通常在 ~/Downloads（使用者從 Slack 下載的那個）
-[ -f ~/Downloads/service-account.json ] && \
-  mv ~/Downloads/service-account.json ~/.config/vox-pm/service-account.json
-chmod 600 ~/.config/vox-pm/service-account.json 2>/dev/null
-```
-
-程式的順序是**使用者授權優先、金鑰後備**，所以兩個都在也不會打架。
+> 程式實際取用的順序是**使用者授權優先、金鑰後備**，所以兩個都在也不會打架：
+> 之後補跑授權就會自動改用授權那把，金鑰留著當備援不影響。
 
 ### 驗證（這一步一定要做，看到 ✓ 才能往下）
 
 ```bash
 cd ~/vox-trace
 set -a; . ~/.config/vox-pm/env; set +a
-uv run --with google-api-python-client --with google-auth --with google-auth-oauthlib \
+uv run --python 3.12 --with google-api-python-client --with google-auth --with google-auth-oauthlib \
   python3 pipeline-pm/vox-pm-gdrive.py auth
 ```
 
