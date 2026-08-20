@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """vox-pm-gdrive — PM 端 Google Drive helper（共用雲端硬碟上傳／下載）。
 
-認證順序：**使用者授權優先、service account 金鑰後備**。新安裝一律走使用者授權
-（`vox-pm-auth.py` 產生 ~/.config/vox-pm/user-token.json）；金鑰只為相容舊機器保留。
+認證順序：**使用者授權優先、service account 金鑰後備**。兩者都是正式做法——手上有哪個檔就用哪個，
+兩個都在時會用授權那把。授權用 `vox-pm-auth.py` 產生 ~/.config/vox-pm/user-token.json；
+沒拿到金鑰檔的人（新加入者）走授權，因為公司已不再發新的 service account 金鑰。
 
 設定步驟見 repo 根目錄 `INSTALL-FOR-AI.md` Step 5；上傳卡住時的修復見 `FIX-UPLOAD-FOR-AI.md`。
 driveId 不是機密（安裝文件裡就有值），不需要向任何人索取。
