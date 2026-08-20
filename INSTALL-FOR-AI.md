@@ -66,6 +66,8 @@ claude plugin install ax@ax-workflow --scope user
 
 ## Step 5　自動上傳雲端（授權 → 設定 → 背景服務）
 
+> 已經裝好、只是上傳卡住（`~/vox-pm-queue/failed/` 有東西）→ 改讀 `FIX-UPLOAD-FOR-AI.md`。
+
 上傳走**使用者授權**（不是金鑰檔）：使用者用自己的公司 Google 帳號授權一次，
 之後錄影以他本人身分上傳到團隊共用碟。沒有長期金鑰要保管，離職即自動失效。
 
@@ -130,7 +132,7 @@ uv run --with google-api-python-client --with google-auth-oauthlib --with google
 ```
 已安裝：vox-record ✅ / 錄製煙霧測試 ✅（trace.zip+video.webm 已產出）
 AX skill：✅（要重開 Claude Code 才看得到）
-自動上傳：❌ 尚未設定（缺 service-account.json）→ 錄完請手動交檔
+自動上傳：❌ 尚未設定（缺 oauth_client.json，未授權）→ 錄完請手動交檔
 ```
 
 ## 使用者之後要怎麼錄

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""vox-pm-gdrive — PM 端 Google Drive helper（Service Account + 共用雲端硬碟）。
+"""vox-pm-gdrive — PM 端 Google Drive helper（共用雲端硬碟上傳／下載）。
 
-認證改用 service account 金鑰（PM 零登入）：一把公司金鑰共用發給所有 PM，
-全部錄製上傳到同一個 Shared Drive 資料夾，Studio 用同一把金鑰下載。
+認證順序：**使用者授權優先、service account 金鑰後備**。新安裝一律走使用者授權
+（`vox-pm-auth.py` 產生 ~/.config/vox-pm/user-token.json）；金鑰只為相容舊機器保留。
+
+設定步驟見 repo 根目錄 `INSTALL-FOR-AI.md` Step 5；上傳卡住時的修復見 `FIX-UPLOAD-FOR-AI.md`。
+driveId 不是機密（安裝文件裡就有值），不需要向任何人索取。
 
 執行方式（帶依賴，不綁 venv）：
     uv run --with google-api-python-client --with google-auth \\
@@ -10,8 +13,8 @@
 
 Subcommands:
     auth
-        驗證 service account 金鑰可用（不需使用者登入 / 不開瀏覽器）：
-        載入金鑰、build service、對 Shared Drive 做一次 list 確認可存取。
+        驗證目前憑證可用（不開瀏覽器）：載入使用者授權或金鑰、build service、
+        對 Shared Drive 做一次 list 確認可存取，並印出實際用了哪一種憑證。
         成功 exit 0，失敗印原因 exit 1。installer 可拿它當 preflight 檢查。
 
     upload --session-dir <dir> --folder <name>
