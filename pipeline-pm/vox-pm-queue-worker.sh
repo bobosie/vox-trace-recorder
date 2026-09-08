@@ -70,6 +70,14 @@ for SRC in "$REC_ROOT"/*/; do
         continue
     fi
 
+    # 錄製端量到的靜音旗標：照樣上傳（影片/trace 仍有價值），但不能不出聲——
+    # 這條 log 是 Studio 端解析前唯一會看到「語音是空的」的地方。
+    if [ -f "$SRC/metadata.json" ] && \
+       /usr/bin/python3 -c "import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get('audioSilent') else 1)" \
+         "$SRC/metadata.json" 2>/dev/null; then
+        log "⚠️  $NAME audio.wav 為數位靜音（語音未錄到），仍照常上傳影片與 trace"
+    fi
+
     touch "$QUEUE/pending/$NAME"
     log "$NAME 上傳中..."
     set +e
@@ -85,6 +93,6 @@ for SRC in "$REC_ROOT"/*/; do
             log "$NAME 網路離線，留待下次重試" ;;
         failed)
             touch "$QUEUE/failed/$NAME"
-            log "$NAME 失敗（rc=$rc）→ failed" ;;
+            log "$NAME 失敗（rc=${rc}）→ failed" ;;
     esac
 done

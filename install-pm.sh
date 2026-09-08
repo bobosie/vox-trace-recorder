@@ -56,6 +56,158 @@ warn() {
     echo -e "  ${YELLOW}⚠️  $1${NC}"
 }
 
+# ─── 純函式（可被測試 source）────────────────────────────────
+
+# Node 版本判定：missing / too-old / ok
+#
+# 只管下界。上界曾經被寫成「>24 就降版」，那是**錯的**——實際的失效條件是
+# 版本組合，不是 Node 單獨太新，見下面 vox_node_hits_extract_bug。
+VOX_NODE_MIN="${VOX_NODE_MIN:-18}"
+VOX_NODE_LTS="${VOX_NODE_LTS:-24}"     # 要裝的時候裝哪一版
+
+# 只看第一行、且拒收長到 `[` 會當成非整數的數字。
+# 解析不出來時回空字串（＝呼叫端判 missing），**不可以 fail-open 判 ok**——
+# 對一個以「別再讓人卡死」為目的的閘門，解析異常就放行是反的方向；
+# 而且 `[` 的 "integer expected" 會直接印在安裝畫面上嚇到使用者。
+_vox_first_num() {
+    local out
+    out="$(printf '%s' "${2:-}" | head -1 | sed -n "$1")"
+    case "$out" in
+        ''|*[!0-9]*) return ;;
+    esac
+    [ "${#out}" -le 4 ] && printf '%s' "$out"
+}
+
+vox_node_major() {
+    _vox_first_num 's/^[[:space:]]*v\{0,1\}\([0-9][0-9]*\).*/\1/p' "${1:-}"
+}
+
+vox_node_minor() {
+    _vox_first_num 's/^[[:space:]]*v\{0,1\}[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/p' "${1:-}"
+}
+
+vox_node_verdict() {
+    local ver="${1:-}" major
+    major="$(vox_node_major "$ver")"
+    if [ -z "$major" ]; then
+        echo missing
+    elif [ "$major" -lt "$VOX_NODE_MIN" ]; then
+        echo too-old
+    else
+        echo ok
+    fi
+}
+
+# 這個 Node 版本是否落在「playwright install 解壓縮無限卡住」的已知範圍？
+#
+# 根因不在 Node 也不在版本新舊，是 yauzl 的串流銷毀迴歸（nodejs/node#63487，
+# 追蹤於 microsoft/playwright#40998 / #40724），**Playwright 1.60.0 已修**。
+# 受影響：Node 24.16.0+、25.x、26.x；Node 24.15.0 正常。
+#
+# 所以正解是「升 Playwright」不是「降 Node」——這支函式只用來判斷要不要
+# 示警與怎麼寫錯誤訊息，不拿來強迫任何人降版。
+# （2026-09-07 Grace 安裝實錄「坑 1」，她花最久的一個；當時 repo 釘在 1.59.1。）
+vox_node_hits_extract_bug() {
+    local ver="${1:-}" major minor
+    major="$(vox_node_major "$ver")"
+    minor="$(vox_node_minor "$ver")"
+    [ -n "$major" ] || { echo no; return; }
+    if [ "$major" -ge 25 ]; then
+        echo yes
+    elif [ "$major" -eq 24 ] && [ -n "$minor" ] && [ "$minor" -ge 16 ]; then
+        echo yes
+    else
+        echo no
+    fi
+}
+
+# 裝 Active LTS 並切過去。brew 的 node@N 是 keg-only，要 link 才會進 PATH。
+#
+# ⚠️ `--overwrite` 會**刪除** brew prefix 裡already存在的同名檔（brew link --help
+#    原話：Delete files that already exist in the prefix while linking）。Intel Mac
+#    的 prefix 是 /usr/local，正好是 nodejs.org 官方 pkg 的落點，所以先示警再做。
+#
+# ⚠️ link 成功 ≠ `node` 解析到那一版：nvm/fnm/volta/asdf 都把自己的 bin 前置到
+#    PATH，brew link 動的是 /opt/homebrew/bin，救不了順序。所以結尾一定要**回頭
+#    驗證**——沒有後置檢查的話，裝了等於沒裝時照樣打綠勾。
+vox_install_node_lts() {
+    warn "brew link --overwrite 會刪掉 $(brew --prefix 2>/dev/null || echo /usr/local) 裡同名的既有檔案"
+    brew install "node@${VOX_NODE_LTS}" || return 1
+    brew unlink node 2>/dev/null
+    brew link --overwrite --force "node@${VOX_NODE_LTS}" || return 1
+    hash -r 2>/dev/null || true
+
+    if [ "$(vox_node_verdict "$(node -v 2>/dev/null)")" != ok ]; then
+        echo "  ❌ 裝好了但 node 沒有解析到新版：$(command -v node) → $(node -v 2>/dev/null)" >&2
+        echo "     PATH 裡有 nvm/fnm/volta/asdf 之類的版本管理器排在 Homebrew 前面。" >&2
+        echo "     請改用它切版本，例如：nvm install ${VOX_NODE_LTS} && nvm use ${VOX_NODE_LTS}" >&2
+        return 1
+    fi
+}
+
+# 跑一個指令並設上限時間，逾時回 124（比照 GNU timeout）。
+#
+# macOS 沒有內建 timeout(1)，但「無限卡住、沒有錯誤訊息」正是這次最貴的失敗
+# 形態——沒有上限的話，壞掉的 Node 會讓安裝停在那裡等到使用者自己放棄。
+# 寧可逾時失敗並印出下一步，也不要沉默地掛著。
+# ⚠️ 只能包**非互動**指令：`"$@" &` 在非互動 shell 會把 stdin 接到 /dev/null，
+#    會問問題的指令在這裡只會拿到 EOF。
+vox_run_with_timeout() {
+    local secs="$1"; shift
+
+    # 非整數秒數（例如照 GNU timeout 習慣寫的 "10m"）會讓下面的 `[ -lt ]` 報錯、
+    # 迴圈條件為假 → 0 秒就把指令砍掉，然後印出「安裝逾時，多半是 yauzl bug」——
+    # 一個根本沒發生的原因。寧可退回預設值，也不要謊報失敗原因。
+    case "$secs" in
+        ''|*[!0-9]*) echo "  ⚠️  逾時秒數 '$secs' 不是整數，改用 600" >&2; secs=600 ;;
+    esac
+
+    # template 一定要帶 X：BSD mktemp 接受無 X 的 template，GNU mktemp 不接受
+    # （Linux/裝了 coreutils gnubin 的 mac 會失敗 → marker 為空 → 逾時偵測失效、
+    #   rc 停在 143 而不是 124 → 整段診斷訊息拿不到）。
+    local marker
+    marker="$(mktemp "${TMPDIR:-/tmp}/voxtimeout.XXXXXX")" || {
+        echo "  ⚠️  無法建立暫存檔，不套用逾時保護" >&2
+        "$@"
+        return $?
+    }
+
+    "$@" &
+    local pid=$!
+
+    (
+        local waited=0
+        while [ "$waited" -lt "$secs" ]; do
+            kill -0 "$pid" 2>/dev/null || exit 0
+            sleep 1
+            waited=$((waited + 1))
+        done
+        kill -0 "$pid" 2>/dev/null || exit 0
+        echo timeout > "$marker"
+        kill -TERM "$pid" 2>/dev/null
+        sleep 5
+        kill -KILL "$pid" 2>/dev/null
+    ) &
+    local watcher=$!
+
+    wait "$pid" 2>/dev/null
+    local rc=$?
+
+    kill "$watcher" 2>/dev/null
+    wait "$watcher" 2>/dev/null
+
+    if [ -s "$marker" ]; then
+        rc=124
+    fi
+    rm -f "$marker"
+    return "$rc"
+}
+
+# 測試只要函式定義，不要跑安裝流程。必須擺在任何實際動作之前。
+if [ -n "${VOX_LIB_ONLY:-}" ]; then
+    return 0 2>/dev/null || exit 0
+fi
+
 # ─── 開始 ───────────────────────────────────────────────────
 
 echo ""
@@ -119,25 +271,36 @@ fi
 
 step "📦 檢查 Node.js..."
 
-if command -v node &>/dev/null; then
-    NODE_VER=$(node -v)
-    NODE_MAJOR=$(echo "$NODE_VER" | sed 's/v//' | cut -d. -f1)
-    if [[ "$NODE_MAJOR" -ge 18 ]]; then
+NODE_VER=""
+command -v node &>/dev/null && NODE_VER=$(node -v)
+
+case "$(vox_node_verdict "$NODE_VER")" in
+    ok)
         skip "Node.js $NODE_VER"
-    else
-        warn "Node.js $NODE_VER 版本太舊（需要 >= 18）"
-        echo -e "  ${YELLOW}升級 Node.js...${NC}"
-        brew install node
+        ;;
+    too-old)
+        warn "Node.js $NODE_VER 太舊（需要 >= ${VOX_NODE_MIN}）"
+        echo -e "  ${YELLOW}升級到 node@${VOX_NODE_LTS}...${NC}"
+        vox_install_node_lts || fail "Node.js 升級失敗" \
+            "請手動執行：brew install node@${VOX_NODE_LTS} && brew link --overwrite --force node@${VOX_NODE_LTS}"
         ok "Node.js $(node -v)"
-    fi
-else
-    echo -e "  ${YELLOW}安裝 Node.js...${NC}"
-    brew install node
-    if command -v node &>/dev/null; then
-        ok "Node.js $(node -v)"
-    else
-        fail "Node.js 安裝失敗" "請手動安裝：brew install node"
-    fi
+        ;;
+    *)
+        echo -e "  ${YELLOW}安裝 Node.js（Active LTS）...${NC}"
+        vox_install_node_lts || fail "Node.js 安裝失敗" \
+            "請手動安裝：brew install node@${VOX_NODE_LTS}"
+        command -v node &>/dev/null \
+            && ok "Node.js $(node -v)" \
+            || fail "Node.js 安裝後仍找不到 node" "檢查 PATH 是否含 $(brew --prefix)/bin"
+        ;;
+esac
+
+# 已知會卡死的 Node 範圍：只示警，不強迫降版——修法是 Playwright >= 1.60，
+# 而本 repo 的 package.json 已釘 ^1.60.0，所以正常流程不會中招。
+if [ "$(vox_node_hits_extract_bug "$(node -v 2>/dev/null)")" = yes ]; then
+    warn "Node $(node -v) 落在 playwright install 卡死的已知範圍（24.16+/25/26）"
+    echo -e "  ${DIM}本 repo 已釘 Playwright ^1.60.0（該版已修），照理不受影響。${NC}"
+    echo -e "  ${DIM}若下一步仍卡住，那是 Playwright 版本沒吃到，不是 Node 要降版。${NC}"
 fi
 
 # ─── Step 5: sox ───────────────────────────────────────────
@@ -156,6 +319,30 @@ else
     fi
 fi
 
+# ─── Step 5b: uv ───────────────────────────────────────────
+#
+# 上傳鏈的硬依賴：本腳本最後掛的 launchd uploader 會走 vox-pm-gdrive.sh，
+# 而它是 `exec "$UV" run ...`。沒有 uv 的話，安裝流程會全程成功、uploader 也
+# 「掛上了」，但每次觸發都 exec 失敗——錄影靜靜積在佇列裡，沒有人會發現。
+# （這個缺口是 2026-09-07 複盤 Grace 安裝時抓到的：她手動裝時自己補了 uv，
+#   所以走完了；照這支腳本自動裝的人不會。）
+
+step "📦 檢查 uv（上傳服務的執行器）..."
+
+if command -v uv &>/dev/null || [ -x "$HOME/.local/bin/uv" ]; then
+    skip "uv $(uv --version 2>/dev/null | awk '{print $2}' || echo '')"
+else
+    echo -e "  ${YELLOW}安裝 uv...${NC}"
+    brew install uv
+    if command -v uv &>/dev/null; then
+        ok "uv 安裝完成"
+    else
+        # 不 fail：錄製本身不需要 uv，只有自動上傳需要
+        warn "uv 安裝失敗——錄製可用，但自動上傳不會動"
+        echo -e "  ${DIM}補裝方式：brew install uv${NC}"
+    fi
+fi
+
 # ─── Step 6: deploy key + SSH config ──────────────────────
 
 if [[ "$VOXTRACE_GIT_URL" == https://* ]]; then
@@ -167,7 +354,7 @@ else
     chmod 700 "$HOME/.ssh"
 
     if [[ -f "$DEPLOY_KEY" ]]; then
-        skip "deploy key（$DEPLOY_KEY）"
+        skip "deploy key（${DEPLOY_KEY}）"
     else
         if [[ -z "${VOX_DEPLOY_KEY_B64:-}" ]]; then
             fail "缺少 deploy key" "請帶環境變數 VOX_DEPLOY_KEY_B64（base64 編碼的私鑰）再執行安裝"
@@ -236,10 +423,24 @@ fi
 
 step "🌐 安裝 Playwright Chromium..."
 
-if npx playwright install chromium; then
+VOX_PW_TIMEOUT="${VOX_PW_TIMEOUT:-600}"
+vox_run_with_timeout "$VOX_PW_TIMEOUT" npx playwright install chromium
+PW_RC=$?
+
+if [ "$PW_RC" -eq 0 ]; then
     ok "Chromium 安裝完成"
+elif [ "$PW_RC" -eq 124 ]; then
+    # 這一條就是坑 1 的出口：卡住時要指向真正的原因，而不是讓下一個人
+    # 從零開始懷疑防毒、Gatekeeper、網路（那三個方向都被排查過，都不是）
+    fail "Playwright Chromium 安裝逾時（${VOX_PW_TIMEOUT}s，卡在解壓縮）" \
+         "已知 bug：Node 24.16+/25/26 搭 Playwright < 1.60.0 會在解壓縮無限卡住
+  （yauzl 串流迴歸，microsoft/playwright#40998、nodejs/node#63487）。
+  正解是升 Playwright，不是降 Node：
+      npm install playwright@^1.60.0 @playwright/test@^1.60.0
+      rm -rf node_modules && npm install && npx playwright install chromium
+  目前：node $(node -v 2>/dev/null)、playwright $(node -p 'require("./node_modules/playwright/package.json").version' 2>/dev/null || echo 未知)"
 else
-    fail "Playwright Chromium 安裝失敗" "請手動執行：npx playwright install chromium"
+    fail "Playwright Chromium 安裝失敗（rc=$PW_RC）" "請手動執行：npx playwright install chromium"
 fi
 
 # ─── Step 10: PM 名字 + .pm-config.json + .pm-mode ────────
@@ -338,7 +539,7 @@ fi
 
 # 真檢查是否建成（不謊報）
 if [[ -x "$SYMLINK_PATH" ]]; then
-    ok "已建立 vox-record 指令（$SYMLINK_PATH）"
+    ok "已建立 vox-record 指令（${SYMLINK_PATH}）"
 else
     warn "vox-record 指令建立失敗，改用桌面「vox-record.command」或跟 Claude 說「幫我錄一段測試」"
 fi
@@ -408,7 +609,7 @@ if [[ -f "$PLIST_SRC" ]]; then
         warn "PM 上傳服務載入失敗，請手動 launchctl load $PLIST_DEST"
     fi
 else
-    warn "找不到 uploader plist（$PLIST_SRC），略過上傳服務"
+    warn "找不到 uploader plist（${PLIST_SRC}），略過上傳服務"
 fi
 
 # ─── Step 13: Service Account 金鑰 + Shared Drive 設定 ────
@@ -423,7 +624,7 @@ chmod 700 "$VOX_PM_CONFIG_DIR"
 
 # (a) service account 金鑰就位：從環境變數 VOX_PM_SA_KEY_B64（base64）解碼寫入。
 if [[ -f "$SA_KEY_PATH" ]]; then
-    skip "service account 金鑰（$SA_KEY_PATH）"
+    skip "service account 金鑰（${SA_KEY_PATH}）"
 elif [[ -n "${VOX_PM_SA_KEY_B64:-}" ]]; then
     if echo "$VOX_PM_SA_KEY_B64" | base64 -d > "$SA_KEY_PATH" 2>/dev/null; then
         chmod 600 "$SA_KEY_PATH"
@@ -444,7 +645,7 @@ if [[ -n "${VOX_PM_DRIVE_ID:-}" ]]; then
     ok "Shared Drive 設定已寫入 $VOX_PM_ENV_FILE"
 else
     warn "未提供 VOX_PM_DRIVE_ID（Shared Drive 的 driveId）"
-    echo -e "  ${DIM}請向開發團隊索取 Shared Drive ID，寫入 $VOX_PM_ENV_FILE：export VOX_PM_DRIVE_ID=<id>${NC}"
+    echo -e "  ${DIM}請向開發團隊索取 Shared Drive ID，寫入 ${VOX_PM_ENV_FILE}：export VOX_PM_DRIVE_ID=<id>${NC}"
 fi
 
 # (c) preflight：金鑰在就驗、不在就跳過。
@@ -469,7 +670,7 @@ if [[ -f "$SKILL_SRC/SKILL.md" ]]; then
     mkdir -p "$HOME/.claude/skills"
     rm -rf "$SKILL_DEST"
     cp -R "$SKILL_SRC" "$SKILL_DEST"
-    ok "Claude skill 已安裝（$SKILL_DEST）"
+    ok "Claude skill 已安裝（${SKILL_DEST}）"
 else
     warn "找不到 skill 來源（$SKILL_SRC/SKILL.md），略過 Claude skill 安裝"
 fi

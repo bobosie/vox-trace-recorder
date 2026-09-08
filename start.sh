@@ -54,6 +54,9 @@ show_help() {
     echo -e "  --auto-test             跳過 Inspector，自動操作後結束（CI 測試用）"
     echo -e "  --script <path>         搭配 --auto-test 使用，載入外部自動化腳本"
     echo -e "  --no-audio              不錄麥克風音訊"
+    echo -e "  --open <url>            額外開一個分頁到該網址（可重複，如前台+後台對照）"
+    echo -e "  --extension <path>      載入指定的 Chrome 擴充目錄（可重複；也可用 VOX_EXTENSIONS 冒號分隔）"
+    echo -e "  --no-extensions         一律不載擴充（即使設了 VOX_EXTENSIONS）"
     echo -e "  --screenshots                開啟截圖（預設全關：load / 定時 / final 都不拍）"
     echo -e "  --no-periodic-screenshots    搭配 --screenshots：保留 load+final，只關定時截圖"
     echo -e "  --screenshot-interval <sec>  定時截圖間隔秒數（預設：3，需搭配 --screenshots）"
@@ -136,16 +139,91 @@ ensure_browser() {
     local cache_dir="${PLAYWRIGHT_BROWSERS_PATH:-$HOME/Library/Caches/ms-playwright}"
     if ! ls -d "$cache_dir"/chromium-* &> /dev/null; then
         echo -e "${YELLOW}⚠️  Playwright Chromium 未安裝，執行 npx playwright install chromium...${NC}"
-        npx playwright install chromium
+
+        # 這裡跟 install-pm.sh 一樣要設上限：Node 24.16+/25/26 搭 Playwright < 1.60.0
+        # 會在解壓縮階段無限卡住、零錯誤訊息（yauzl 迴歸，microsoft/playwright#40998）。
+        # 安裝器那邊擋住了，但這條路徑是**執行期**觸發的——換機、清快取、或 brew 把
+        # node 升上去之後第一次錄影，會在這裡重現同一個當機。沒有上限就等於沒有出口。
+        local timeout_secs="${VOX_PW_TIMEOUT:-600}" pid rc=0
+        npx playwright install chromium &
+        pid=$!
+        (
+            local waited=0
+            while [ "$waited" -lt "$timeout_secs" ]; do
+                kill -0 "$pid" 2>/dev/null || exit 0
+                sleep 1
+                waited=$((waited + 1))
+            done
+            kill -TERM "$pid" 2>/dev/null
+            sleep 5
+            kill -KILL "$pid" 2>/dev/null
+        ) &
+        local watcher=$!
+        wait "$pid" 2>/dev/null || rc=$?
+        kill "$watcher" 2>/dev/null
+        wait "$watcher" 2>/dev/null
+
+        if ! ls -d "$cache_dir"/chromium-* &> /dev/null; then
+            echo -e "${RED}❌ Chromium 安裝沒有完成（rc=$rc）${NC}"
+            echo -e "   ${DIM}下載到 100% 後卡住不動，是已知 bug：Node 24.16+/25/26 搭 Playwright < 1.60.0${NC}"
+            echo -e "   ${DIM}（microsoft/playwright#40998、nodejs/node#63487）。正解是升 Playwright，不是降 Node：${NC}"
+            echo -e "   ${DIM}  npm install playwright@^1.60.0 @playwright/test@^1.60.0${NC}"
+            echo -e "   ${DIM}  rm -rf node_modules && npm install && npx playwright install chromium${NC}"
+            echo -e "   ${DIM}目前 playwright：$(node -p "require('$SCRIPT_DIR/node_modules/playwright/package.json').version" 2>/dev/null || echo 未知)${NC}"
+            return 1
+        fi
         echo ""
     fi
 }
 
 # ─── Commands ───────────────────────────────────────────────
 
+# 錄前預檢：確認「這個進程上下文」真的收得到音。
+#
+# macOS 在麥克風沒有 TCC 授權時不會報錯，而是照常開 IO 並餵全零 buffer，所以
+# 檔案大小、長度、header 全都正常，只有內容是靜音。授權綁在 responsible process
+# （具授權的 GUI app）身上，不是綁 sox——從 sshd 或無 responsible app 的背景
+# 進程（如 Claude Code 交接後的背景 job）啟動就會踩到，而且**無法彈窗要授權**。
+# 2026-08-27 實例：整場 6 分鐘口述錄成 -91 dB，直到 Studio 端解析才發現。
+#
+# 對策是錄前花 1 秒探測，全零就當場擋下，不要讓使用者白講一場。
+preflight_audio() {
+    for arg in "$@"; do
+        [ "$arg" = "--no-audio" ] && return 0
+    done
+    command -v sox &> /dev/null || return 0   # 沒 sox 就沒錄音，交給既有流程處理
+
+    local probe peak
+    probe=$(mktemp -t voxpreflight).wav
+    rec -r 16000 -c 1 -b 16 "$probe" trim 0 1 &> /dev/null
+    peak=$(sox "$probe" -n stat 2>&1 | sed -n 's/.*Maximum amplitude:[[:space:]]*//p')
+    rm -f "$probe"
+
+    # 量不到就放行，不要因為探測失敗擋住錄製
+    [ -z "$peak" ] && return 0
+    # 0.001 門檻：16-bit 的 1 LSB 是 0.0000305，人聲至少 0.01 量級
+    awk "BEGIN{exit !($peak < 0.001)}" || return 0
+
+    echo -e "${RED}🔇 錄前預檢失敗：這個進程收到的是數位靜音（峰值 ${peak}）${NC}"
+    echo ""
+    echo -e "   麥克風沒有 TCC 授權時，macOS 不會報錯，而是餵全零 buffer——"
+    echo -e "   照錄下去語音會整場是空的，且要到事後解析才會發現。"
+    echo ""
+    echo -e "   ${DIM}成因：授權綁在具授權的 GUI app（responsible process）上。從 ssh 或"
+    echo -e "   無 responsible app 的背景進程啟動，TCC 直接拒絕且無法彈窗索取。${NC}"
+    echo ""
+    echo -e "   ${GREEN}解法：改從有授權的上下文啟動，例如既有的 tmux server：${NC}"
+    echo -e "   ${DIM}tmux new-session -d -s vox-rec \"cd $(pwd) && ./start.sh record ...\"${NC}"
+    echo ""
+    echo -e "   ${DIM}確認可用：sox -t coreaudio \"<裝置名>\" -n stat trim 0 3 峰值需 > 0.01${NC}"
+    echo -e "   ${DIM}真的不需要錄音：加 --no-audio 跳過本檢查${NC}"
+    return 1
+}
+
 cmd_record() {
     check_deps
     ensure_browser
+    preflight_audio "$@" || exit 1
     echo -e "${GREEN}▶ 啟動 Playwright 錄製...${NC}"
     echo ""
     npx tsx src/record-manual-session.ts "$@"
@@ -192,7 +270,7 @@ cmd_stop() {
     case "$real_dir/" in
         "$real_root"/?*/) : ;;  # 合法：root 底下的子目錄
         *)
-            echo -e "${RED}安全錯誤：session 路徑逸出錄製目錄（$session）${NC}"
+            echo -e "${RED}安全錯誤：session 路徑逸出錄製目錄（${session}）${NC}"
             exit 1
             ;;
     esac

@@ -79,18 +79,20 @@ uv run --python 3.12 --with google-auth --with google-auth-oauthlib --with googl
 
 ```bash
 cd ~/vox-trace
-set -a; . ~/.config/vox-pm/env; set +a
 uv run --python 3.12 --with google-api-python-client --with google-auth --with google-auth-oauthlib \
   python3 pipeline-pm/vox-pm-gdrive.py auth
 ```
 
-要看到 `可存取 Shared Drive ✓`（走 A 會多印「憑證：使用者授權」）。
+要看到 `可存取 Shared Drive ✓`。括號裡一定會接憑證種類：**走 A（金鑰）會印
+「憑證：service account 金鑰」，走 B（使用者授權）才印「憑證：使用者授權」**，
+兩種都算通過。（腳本會自己讀 `~/.config/vox-pm/env`，不必先 source。）
 
 | 訊息 | 意思 | 你該做的 |
 |------|------|---------|
-| `404 ... driveId` / `insufficientFilePermissions` | 這個 Google 帳號**還沒被加進共用碟** | 把 A 印出來的信箱回報給開發團隊請他加人；同時先走 B 讓今天的檔案傳得上去 |
-| `invalid_grant` | 授權過期或被撤銷 | 重跑 A |
-| 缺 `VOX_PM_DRIVE_ID` | Step 1 沒生效 | 確認有 `set -a; . ~/.config/vox-pm/env; set +a` 再跑 |
+| `403 teamDriveMembershipRequired` / `insufficientFilePermissions` | 這個 Google 帳號**還不是共用碟成員**（要加成 Shared Drive 成員，只把資料夾分享給他不算數——`corpora=drive` 查詢不吃資料夾分享；權限要 Contributor 以上，檢視者不能上傳） | 把**信箱**回報給開發團隊請他加人——信箱是 **B**（使用者授權）印出來的；走 A（金鑰）沒有信箱，那時要回報的是 service account 的帳號名稱。腳本現在會直接把要貼給對方的整段話印出來，照抄即可 |
+| `404 ... driveId` | **driveId 打錯或碟已停用**——注意這個跟上面那條處置相反，**找人加權限沒有用** | 對一下 `~/.config/vox-pm/env` 裡的值與 Step 1 是否一致 |
+| `invalid_grant` | **使用者授權**過期或被撤銷（與金鑰無關） | 重跑 **B**（重新授權） |
+| 缺 `VOX_PM_DRIVE_ID` | env 檔真的沒有這個值（腳本已經會自己讀 `~/.config/vox-pm/env`，**不必先 source**） | `grep VOX_PM_DRIVE_ID ~/.config/vox-pm/env`，沒有就照 Step 1 補上 |
 | 兩條路都不通 | — | 停下來，把完整錯誤訊息回報給使用者，**不要假裝設定好了** |
 
 ## Step 3　把積壓的錄製補傳上去
@@ -109,13 +111,19 @@ ls ~/vox-pm-queue/done/                        # 傳成功的會出現在這裡
 ## Step 4　背景上傳服務（以後自動傳，不用再手動跑）
 
 ```bash
+mkdir -p ~/Library/LaunchAgents
 sed "s#__VOXTRACE_DEST__#$HOME/vox-trace#g" \
   ~/vox-trace/pipeline-pm/com.voxtrace.vox-pm-uploader.plist \
   > ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist
 launchctl unload ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist 2>/dev/null
 launchctl load -w ~/Library/LaunchAgents/com.voxtrace.vox-pm-uploader.plist
-launchctl list | grep vox-pm-uploader          # 有一行才算掛上
+launchctl list | grep vox-pm-uploader          # 有一行，且第二欄（退出碼）是 0
 ```
+
+> **不要用 `sudo`**——這是使用者層級的 LaunchAgent，用 sudo 會裝到別的地方去。
+>
+> 第一欄（PID）**通常是 `-`**：它是每 120 秒跑一次的週期性 job，不在執行中就沒有 PID。
+> 看到 `-　0　com.voxtrace.vox-pm-uploader` 是正常的，不要以為沒掛上。
 
 ## Step 5　回報（照實說，不要美化）
 

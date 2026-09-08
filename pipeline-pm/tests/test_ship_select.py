@@ -55,6 +55,29 @@ def main() -> int:
             (dp / name).write_text("x")
         check("全齊時順序等於 SHIP_FILES", mod.select_ship_files(dp) == mod.SHIP_FILES)
 
+    # 多 tab 錄製：Playwright 只把其中一支 rename 成 video.webm，其餘留 page@<hash>.webm。
+    # 一次錄製的每個 tab 影片都要上傳，不能只傳 video.webm。
+    with tempfile.TemporaryDirectory() as d:
+        dp = Path(d)
+        (dp / "metadata.json").write_text("{}")
+        (dp / "video.webm").write_text("x")
+        (dp / "page@b43cfd80.webm").write_text("x")
+        (dp / "page@8aaa5420.webm").write_text("x")
+        (dp / "page@eae556de.webm").write_text("x")
+        (dp / "page@notavideo.txt").write_text("x")  # 非 .webm 不挑
+
+        got = mod.select_ship_files(dp)
+        check("多 tab：每支 page@*.webm 都入清單",
+              all(f"page@{h}.webm" in got for h in ("b43cfd80", "8aaa5420", "eae556de")))
+        check("多 tab：video.webm 仍在清單", "video.webm" in got)
+        check("多 tab：非 .webm 的 page@ 檔不挑", "page@notavideo.txt" not in got)
+        check("多 tab：page@*.webm 依字典序穩定排列",
+              [n for n in got if n.startswith("page@")]
+              == ["page@8aaa5420.webm", "page@b43cfd80.webm", "page@eae556de.webm"])
+        check("多 tab：固定清單排在 page@*.webm 之前",
+              got.index("metadata.json") < got.index("page@8aaa5420.webm"))
+        check("多 tab：無重複項", len(got) == len(set(got)))
+
     print(f"\nResult: {PASS} passed, {FAIL} failed")
     return 0 if FAIL == 0 else 1
 

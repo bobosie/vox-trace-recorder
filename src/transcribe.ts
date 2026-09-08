@@ -8,6 +8,7 @@ import { spawnSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as yaml from 'js-yaml';
+import { commandPath, homeDir, isExecutable, isWindows } from './shared/platform';
 
 interface WhisperSegment {
   start: number;
@@ -45,15 +46,21 @@ function getAudioDuration(audioPath: string): number {
 function resolveWhisperBin(): string | null {
   // 先看 PATH；找不到再退到已知安裝位置（vox-trace 子程序 PATH 常不含 pip user bin，
   // 導致「Whisper not available」而產空稿——見 vestpkg R8/R9 兩輪踩坑）。
-  const which = spawnSync('which', ['whisper'], { encoding: 'utf-8' });
-  if (which.status === 0 && which.stdout.trim()) return which.stdout.trim();
-  const home = process.env.HOME || '';
-  const candidates = [
-    path.join(home, 'Library/Python/3.9/bin/whisper'),
-    path.join(home, '.local/bin/whisper'),
-    '/opt/homebrew/bin/whisper',
-    '/usr/local/bin/whisper',
-  ];
+  const found = commandPath('whisper');
+  if (found) return found;
+  const home = homeDir();
+  // Windows 的 pip 裝到 %APPDATA%\Python\Scripts；POSIX 的候選路徑對 Windows 無害（不存在而已）
+  const candidates = isWindows
+    ? [
+        path.join(process.env.APPDATA || '', 'Python', 'Scripts', 'whisper.exe'),
+        path.join(home, 'AppData', 'Roaming', 'Python', 'Scripts', 'whisper.exe'),
+      ]
+    : [
+        path.join(home, 'Library/Python/3.9/bin/whisper'),
+        path.join(home, '.local/bin/whisper'),
+        '/opt/homebrew/bin/whisper',
+        '/usr/local/bin/whisper',
+      ];
   for (const c of candidates) {
     if (fs.existsSync(c)) return c;
   }
@@ -68,6 +75,13 @@ function tryWhisperCli(audioPath: string, outputDir: string): WhisperSegment[] |
   try {
     spawnSync(whisperBin, [
       audioPath, '--model', 'small', '--language', 'zh',
+      // 中文長音檔會跳針——同一句被重複輸出幾十次（實測 4 分鐘的錄音，
+      // 最後 1 分鐘全變成同一個詞重複 11 次，那段口述等於整段遺失）。
+      // 成因是 whisper 把前一段輸出餵回當條件，一旦進入重複就出不來。
+      // 這三個參數在 AX 那條線的 vox_transcribe.py 早就加了，本機這條一直沒接上。
+      '--condition_on_previous_text', 'False',
+      '--compression_ratio_threshold', '2.4',
+      '--no_speech_threshold', '0.6',
       '--output_format', 'json', '--output_dir', outputDir,
     ], { stdio: ['pipe', 'pipe', 'pipe'], timeout: 900_000 });
 
@@ -84,15 +98,22 @@ function tryWhisperCli(audioPath: string, outputDir: string): WhisperSegment[] |
 }
 
 function tryWhisperPython(audioPath: string, outputDir: string): WhisperSegment[] | null {
-  const pythonPath = path.join(process.env.HOME || '~', 'Tool/spec_from_video/venv/bin/python');
-  const which = spawnSync('test', ['-x', pythonPath]);
-  if (which.status !== 0) return null;
+  // 這條是 bobo 個人機器上的 whisper venv，其他人（與 Windows）本來就不會有，
+  // 走不到不是錯誤。用 fs 判可執行，不要用 POSIX 的 test -x（Windows 沒有）。
+  const pythonPath = isWindows
+    ? path.join(homeDir(), 'Tool', 'spec_from_video', 'venv', 'Scripts', 'python.exe')
+    : path.join(homeDir(), 'Tool/spec_from_video/venv/bin/python');
+  if (!isExecutable(pythonPath)) return null;
 
   console.log('   Using Python whisper...');
   const script = `
 import whisper, json, sys
 model = whisper.load_model("small")
-result = model.transcribe(sys.argv[1], language="zh")
+# condition_on_previous_text=False 是防中文跳針的關鍵（見上方 CLI 分支的說明）
+result = model.transcribe(sys.argv[1], language="zh",
+                          condition_on_previous_text=False,
+                          compression_ratio_threshold=2.4,
+                          no_speech_threshold=0.6)
 segments = [{"start": s["start"], "end": s["end"], "text": s["text"].strip()} for s in result["segments"]]
 print(json.dumps(segments))
 `;
